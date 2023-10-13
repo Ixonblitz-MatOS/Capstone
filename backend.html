@@ -1,0 +1,70 @@
+<!-- FILEPATH: /C:/Users/mgavell/Desktop/Programming/Projects/capstone/Capstone/index.html -->
+
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>MatOS Backend</title>
+        <style>
+            /* Hide the content by default */
+            #content {
+                display: none;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Welcome to my MatOS Backend!</h1>
+        <p>Please enter the correct password to access the content:</p>
+        <input type="text" id="username">
+        <input type="password" id="password">
+        <button onclick="checkPassword()">Submit</button>
+        <div id="content">
+            <h2>Secret Content</h2>
+            <p>This is the secret content that only appears if you enter the correct password.</p>
+        </div>
+        <script src="common.js"></script>
+        <script>
+
+            function validateCredentials(username,password){
+                /*send username and password to server for verification at 127.0.0.1
+                if correct return true
+                take this form and fill in the username and password:
+                {"login" - {username: "username", password: "password"}}
+                return true
+                */
+                
+                //sent data to server
+                var xhttp = new XMLHttpRequest();
+                //specify the destination ip being the website name/ip in the search bar
+                xhttp.open("POST", window.location.href, true);
+                xhttp.send("{login: {username: " + username + ", password: " + password + "}}");
+                //receive data from server
+                xhttp.onreadystatechange = function() {
+                    if (this.readyState == 4 && this.status == 200) {
+                        // Typical action to be performed when the document is ready:
+                        if(xhttp.responseText == "NULL"){
+                            return false;
+                        }  else{
+                            //check if xhttp.responseText is a python uuid
+                            if(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(responseText)){
+                                //set response to cookie
+                                document.cookie = "uuid=" + xhttp.responseText;     
+                                return true;
+                            }
+                        };
+                    }
+                };
+            }
+            function checkPassword() {
+                var username = document.getElementById("username").value;
+                var password = document.getElementById("password").value;
+                //send username and password to server for verification at 127.0.0.1(for testing)
+                
+                if () {
+                    document.getElementById("content").style.display = "block";
+                } else {
+                    alert("Incorrect password. Please try again.");
+                }
+            }
+        </script>
+    </body>
+</html>
