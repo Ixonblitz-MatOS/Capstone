@@ -72,6 +72,7 @@ Packet Sending:
     :NOTE: Hosts work around the server work. Host code will adapt to this packet sending method MOST OF THE TIME.
 """
 import socket
+import threading
 import requests
 import http.server
 import socketserver
@@ -140,7 +141,23 @@ class error:
     def add_active_user(self,username,session_id,IP):self.active_users.append({"username":username,"session_id":session_id,"IP":IP})
 global manager,server
 manager=error()
+#get server ip through domain name "matOS.web.com"
+
+#server=socket.gethostbyname("matOS.web.com")
 server='127.0.0.1'
+def check_duplicate_users():
+    """
+    checks in users.json if there are duplicate users and removes them leaving the first one
+    """
+    manager.print("INFO",f"Checking for duplicate users at {datetime.datetime.now()}")
+    with open("users.json","r") as f:
+        users=json.load(f)
+        for user in users["users"]:
+            for user2 in users["users"]:
+                if user["username"]==user2["username"] and user["id"]==user2["id"] and user["password"]==user2["password"] and user!=user2:
+                    manager.print("WARNING",f"Duplicate user {user['username']} found at {datetime.datetime.now()}")
+                    users["users"].remove(user2)
+    with open("users.json","w") as f:json.dump(users,f)
 def askAdmin()->bool:
     """
     admin access=true
@@ -165,6 +182,13 @@ def add_user(username, password,id):
      Adds username and passwords and id to represent hierarchy where 1=admin and 0=user in their corresponding place in users.json
      
     """
+    #check if user exists first in users.json without logging
+    with open("users.json","r") as f:
+        users=json.load(f)
+        for user in users["users"]:
+            if user["username"]==username:
+                manager.print("WARNING",f"User {username} attempted to be added at {datetime.datetime.now()} but already exists")
+                return False
     if id==1:
          manager.print("INFO",f"Attempting Adding user {username} at {datetime.datetime.now()} as an admin")
          if(askAdmin()):pass
@@ -173,7 +197,7 @@ def add_user(username, password,id):
     manager.print("INFO",f"Adding user {username} at {datetime.datetime.now()}")
     with open("users.json","r") as f:
             users=json.load(f)
-            users["users"].append({"id":id,"name":username,"password":password})
+            users["users"].append({"id":id,"username":username,"password":password})
     with open("users.json","w") as f:json.dump(users,f)
 def remove_user(username):
     """
@@ -249,8 +273,7 @@ def send_get_active_users(IP):
     take get active users string and send to the requestig client by IP
 
     """
-
-def handle_message(message):
+def handle_message(message:dict):
     """
     takes received messages and processes. 
     Following messages are:
@@ -264,7 +287,7 @@ def handle_message(message):
     return true if successful
     """
 
-    match message.keys()[0]:
+    match list(message.keys())[0]:
         case "login":
                 #get username and password from message format above
                 username=message["login"]["username"]
@@ -278,6 +301,10 @@ def handle_message(message):
                             if user["password"]==password:
                                 #generate a session id and add to active users
                                 session_id=str(uuid.uuid4())
+                                if message["login"]["ip"]=="testing":
+                                    manager.print("INFO",f"DEBUG: User {username} logged in at {datetime.datetime.now()} with session id {session_id}")
+                                    manager.active_users.append({"username":username,"session_id":session_id,"IP":"testing"})
+                                    return True
                                 manager.add_active_user(username,session_id,message["login"]["ip"])
                                 #send session id to client
                                 connect_to_host(message["login"]["ip"],5151,session_id)
@@ -290,14 +317,10 @@ def handle_message(message):
                                 connect_to_host(message["login"]["ip"],5151,"NULL")
                                 return False
 
-                            else:
-                                manager.print("WARNING",f"User {username} attempted login at {datetime.datetime.now()} with incorrect password")
-                                connect_to_host(message["login"]["ip"],5151,"NULL")
-                                return False
-                        else:
-                            manager.print("WARNING",f"User {username} attempted login at {datetime.datetime.now()} with incorrect username")
-                            connect_to_host(message["login"]["ip"],5151,"NULL")
-                            return False
+                            else:manager.print("WARNING",f"User {username} attempted login at {datetime.datetime.now()} with incorrect password.")
+                        else:manager.print("WARNING",f"User {username} attempted login at {datetime.datetime.now()} with incorrect username. ")
+                    connect_to_host(message["login"]["ip"],5151,"NULL")
+                    return False
         case "logout":
             #get username from message format above
             username=message["logout"]["username"]
@@ -349,18 +372,64 @@ def handle_message(message):
                                     return True
                         manager.print("WARNING",f"User {username} attempted to get active users at {datetime.datetime.now()} without admin privileges")
                         return False             
-
-
-
+        case "recv_special_id":
+            manager.print("INFO",f"Received special id at {datetime.datetime.now()}")
+            return True
+        case _:
+            manager.print("WARNING",f"Received unknown message at {datetime.datetime.now()}")
+            return False
+def startup():
+    """
+    Server Maintenance Startup(should run everytime server starts up)
+    """
+    check_duplicate_users()
+def listen(expected_ip)->dict:
+    """
+    Listens on port 5151 on separate thread to listen for any http data sent using html XMLHttpRequest() and returns the content as a dictionary from its string form of "{command:{arguments:paramter,...}}"
+    """
+    ret_val=None
+    def _listen(expected_ip):
+        """
+        actual function
+        """
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind((server,5151))
+            s.listen()
+            while True:
+                conn, addr = s.accept()
+                if not addr[0]==expected_ip:
+                    conn.close()
+                    nonlocal ret_val
+                    ret_val= False
+                with conn:
+                    while True:
+                        data = conn.recv(1024)
+                        if not data: break
+                        print(data.decode())
+                        nonlocal ret_val
+                        ret_val= json.loads(data.decode())
+                        
+    threading.Thread(target=_listen,args=(expected_ip)).start()
+    return ret_val
 def main():
     """
     testing function only
     FINISHED:
         ADD_USER()
         REMOVE_USER()
-    
+        login
+        logout
+
+    TEST:
+        get_users
+        get_active_users
+        recv_special_id
+        listen()
     """
-    
+
 if __name__ == "__main__":
     PORT=5151
+    #make check_duplicate_users() run every 5 minutes in a thread without stopping the main thread
+    threading.Timer(300,check_duplicate_users).start()
+    
     main()
