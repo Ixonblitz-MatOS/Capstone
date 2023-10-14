@@ -75,6 +75,7 @@ import socket
 import threading
 import requests
 import http.server
+import websocket
 import socketserver
 import socket
 import json
@@ -385,30 +386,32 @@ def startup():
     check_duplicate_users()
 def listen(expected_ip)->dict:
     """
-    Listens on port 5151 on separate thread to listen for any http data sent using html XMLHttpRequest() and returns the content as a dictionary from its string form of "{command:{arguments:paramter,...}}"
+    Listens on port 5151 on separate thread to listen for any http data sent using websocket and returns the content as a dictionary from its string form of "{command:{arguments:paramter,...}}"
     """
     ret_val=None
     def _listen(expected_ip):
         """
         actual function
         """
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind((server,5151))
-            s.listen()
-            while True:
-                conn, addr = s.accept()
-                if not addr[0]==expected_ip:
-                    conn.close()
-                    nonlocal ret_val
-                    ret_val= False
-                with conn:
-                    while True:
-                        data = conn.recv(1024)
-                        if not data: break
-                        print(data.decode())
-                        nonlocal ret_val
-                        ret_val= json.loads(data.decode())
-                        
+        class SimpleEcho(websocket.WebSocket):
+            def handleMessage(self):
+                # echo message back to client
+                message=self.data
+                nonlocal ret_val
+                ret_val=json.loads(message)
+                if ret_val["login"]["ip"]==expected_ip:
+                    if handle_message(ret_val):self.sendMessage("ACK")
+                    else:self.sendMessage("NACK")
+                else:self.sendMessage("NACK")
+            def handleConnected(self):pass
+            def handleClose(self):pass
+        #define SimpleWebSocketServer
+        class SimpleWebSocketServer(websocket.WebSocketServer):
+            def __init__(self, host, port, websocketclass, selectInterval=0.1):
+                websocket.WebSocketServer.__init__(self, host, port, websocketclass, selectInterval)
+        server = SimpleWebSocketServer('', 5151, SimpleEcho)
+        server.serveforever()
+                    
     threading.Thread(target=_listen,args=(expected_ip)).start()
     return ret_val
 def main():
