@@ -1,125 +1,63 @@
 """
-backend of senior capstone MatOS website
-Authors:   Ixonblitz-MatOS
-Version:   1.0
-Date:      10/13/2023
-Description: This is the backend of the MatOS website. It will handle all the requests from the frontend and send the appropriate responses. It will also handle the database and the login system. There may be possibly dynamic web change implementation.
+Author: Ixonblitz-MatOS
+Date: 10/10/2021
+Description:
+    New Server backend using Websockets
+    The original got screwed up on restart after saving. This is the second build
+CONSTANTS:
+    SERVER->str: Server IP
+    PORT->int: Server Port
+    VERSION->str: Server Version
+    SETTINGS->dict: Server Settings
+    NULL->str: Null value(used when false is returned or other issues arise)
+FUNCTIONS:
+    check_duplicate_users()->None
+        checks in users.json if there are duplicate users and removes them leaving the first one
+    askAdmin()->bool
+        Asks for an admin password to complete a command and returns true if the admin is valid
+    add_user(username:str, password:str,hierarchy:int)->bool
+        Adds username and passwords and id to represent hierarchy where 1=admin and 0=user in their corresponding place in users.json
+        TO ADD AN ADMIN askAdmin() must be true and will be called
+        returns true if successful;else False
+    remove_user(username:str)->bool
+        removes user from users.json
+        required Admin
+        returns true if successful;else False
+    get_all_users()->list
+        requires admin access
+        returns the list of users to send over websocket
+        returns None if failed
+CLASSES:
+    error(NoDerive):
+        holds active users
+        returns get_active_users()->list
+        returns logout_user(username:str)->None
+        print(severity:str,message:str)->None
 
+STORAGE NOTES:
+    self.active_users->list: holds active users in format:
+        [{"username":username,"session_id":session_id,"IP":IP,"recv":False},...]
+    users=>users.json->dict: holds all users in format:
+        {"users":[{"id":hierarchy,"username":username,"password":password},...]}
 
-Inner Workings:
-    Functions:
-        connect_to_host(HOST, PORT,msg)
-            This function will connect to the host and send the message to the host. It will then receive a message from the host and print it out. It will then close the connection.
-
-        send_http_request(url)
-            This function will send a GET request to the URL and print out the response content.
-
-        start_http_server(PORT)
-            This function will start the http server at the specified port. It will then serve forever.
-
-        error(severity, message)
-            This function will use escape codes to create messages in different colors depending on severity and print the message in format:
-                [severity] message
-            severity:
-                red=CRITICAL
-                yellow=WARNING
-                white=INFO
-
-        askAdmin()
-            This function will check in users.json if admin exists and ask for username/password and validate
-
-        add_user(username, password,id)
-            This function will add username and passwords and id to represent hierarchy where 1=admin and 0=user in their corresponding place in users.json
-
-        remove_user(username)
-            This function will remove user from users.json
-
-        get_users()
-            This function will get a list of all users separated by commas to be printed
-            DOES NOT SEEK ACKNOWLEDGEMENT
-
-        await_response()
-            This function will wait for a response from the client for uuid acknowledgement
-            true=succesful
-            DOES NOT SEEK ACKNOWLEDGEMENT
-
-        send_get_users(IP)
-            This function will take get users string and send to the requestig client by IP
-            DOES NOT SEEK ACKNOWLEDGEMENT
-        handle_message(message)
-            This function will take received messages and processes. 
-            Following messages are:
-                {"login" - {username: "username", password: "password","ip":"ip"}}
-                {"logout" - {username: "username"}}
-                {"get_users" - {username: "username"}}
-                {"get_active_users" - {}}
-                {"recv_special_id" - {}}
-            users are managed in the file users.json
-
-            return true if successful
-
-        main()
-            This is the testing function only
-Packet Sending:
-    1. Server receives login message from a host
-    2. Server checks if user exists in users.json and verifies credentials
-    3. Server sends a uuid to the host and notes the IP address associated with the uuid and account
-    4. Server waits for a recv_special_id message from the host; if not received, the account and its uuid will be revoked
-    5. Server receives a message from backend terminal(frontend backend.html)
-    6. Server interprets it based on description in handle_message(message)
-    :NOTE: Server will not send a message to the host unless it is a uuid or a get_users message
-    :NOTE: Server will not send a message to the host unless it is a uuid or a get_active_users message
-    :NOTE: Hosts work around the server work. Host code will adapt to this packet sending method MOST OF THE TIME.
 """
-import socket
+from multiprocessing.pool import ThreadPool
+from websockets.server import serve
+from typing import NoReturn
 import threading
-import requests
-import http.server
-import websocket
-import socketserver
-import socket
 import json
 import uuid
 import datetime
 import getpass
-
+import asyncio
 #Constants
-RECV_SPECIAL_ID="recv_special_id"
 
-def connect_to_host(HOST, PORT,msg):
-    # Create a socket object
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        # Connect to the host
-        s.connect((HOST, PORT))
-        print(f"Connected to {HOST}:{PORT}")
-
-        # Send a message to the host
-        message = msg
-        s.sendall(message.encode())
-        print(f"Sent message: {message}")
-
-        # Receive a message from the host
-        data = s.recv(1024)
-        print(f"Received message: {data.decode()}")
-
-        # Close the connection
-        s.close()
-        print("Connection closed")
-
-def send_http_request(url):
-    # Send a GET request to the URL
-    response = requests.get(url)
-
-    # Print the response content
-    print(response.content)
-def start_http_server(PORT):
-    #entry point
-    
-    Handler = http.server.SimpleHTTPRequestHandler
-    
-    with socketserver.TCPServer(("", PORT), Handler) as httpd:
-        print("serving at port", PORT)
-        httpd.serve_forever()
+global manager,SERVER,NULL,VERSION,SETTINGS,PORT
+PORT=5151
+SERVER="192.168.20.175"
+VERSION="0.0.2"
+NULL="NULL"
+SETTINGS={}
 class error:
     """
      class that uses escape codes to create messages in different colors depending on severity and print the message in format:
@@ -135,17 +73,46 @@ class error:
         self.severitylookup={"CRITICAL":"red","WARNING":"yellow","INFO":"white"}
         self.end="\033[0m"
         self.active_users=[]
-    def print(self,severity,message):
+    def print(self,severity:str,message:str)->None:
         a=f"{self.colors[self.severitylookup[severity]]}[{severity}] {message}{self.end}"
         print(a)
         self.logs.append(a)
-    def add_active_user(self,username,session_id,IP):self.active_users.append({"username":username,"session_id":session_id,"IP":IP})
-global manager,server
+    def add_active_user(self,username:str,session_id:str,IP:str)->None:self.active_users.append({"username":username,"session_id":session_id,"IP":IP,"recv":False})
+    def logout_user(self,username:str)->None:
+        for i in self.active_users:
+            if i["username"]==username:self.active_users.remove(i)
+    def get_active_users(self)->list:return self.active_users
+    def check_username_exists(self,username:str)->bool:
+        """
+        returns true if username in users.json
+        """
+        with open("users.json","r") as f:
+            users=json.load(f)
+            for user in users["users"]:
+                if user["username"]==username:return True
+            return False
+    def get_users(self)->list:
+        """
+        returns all users in users.json with username only as a list
+        """
+        with open("users.json","r") as f:
+            users=json.load(f)
+            return [i["username"] for i in users["users"]]
+    def validate_signin(self,username:str,password:str)->None:
+        """
+        checks username and password in users.json
+        compares to parameters
+        returns true if is correct
+        false if not
+        """
+        with open("users.json","r") as f:
+            users=json.load(f)
+            for user in users["users"]:
+                if user["username"]==username and user["password"]==password:return True
+            return False
 manager=error()
-#get server ip through domain name "matOS.web.com"
-
-#server=socket.gethostbyname("matOS.web.com")
-server='127.0.0.1'
+########################################################################################################################
+#Server Functions
 def check_duplicate_users():
     """
     checks in users.json if there are duplicate users and removes them leaving the first one
@@ -178,10 +145,10 @@ def askAdmin()->bool:
                 else:
                     manager.print("WARNING",f"Admin Access Denied at {datetime.datetime.now()} for user {username}")
                     return False
-def add_user(username, password,id):
+def add_user(username:str, password:str,hierarchy:int)->bool:
     """
      Adds username and passwords and id to represent hierarchy where 1=admin and 0=user in their corresponding place in users.json
-     
+     returns true if successful;else False
     """
     #check if user exists first in users.json without logging
     with open("users.json","r") as f:
@@ -190,249 +157,127 @@ def add_user(username, password,id):
             if user["username"]==username:
                 manager.print("WARNING",f"User {username} attempted to be added at {datetime.datetime.now()} but already exists")
                 return False
-    if id==1:
+    #If is adding an admin check for admin access
+    if hierarchy==1:
          manager.print("INFO",f"Attempting Adding user {username} at {datetime.datetime.now()} as an admin")
          if(askAdmin()):pass
          else:
               error("CRITICAL","Admin Attempt Failed")
+              return False  
     manager.print("INFO",f"Adding user {username} at {datetime.datetime.now()}")
     with open("users.json","r") as f:
             users=json.load(f)
-            users["users"].append({"id":id,"username":username,"password":password})
+            users["users"].append({"id":hierarchy,"username":username,"password":password})
     with open("users.json","w") as f:json.dump(users,f)
-def remove_user(username):
+def remove_user(username:str)->bool:
     """
-    removes user from users.json
+    remove user if admin is given
     """
-    manager.print("INFO",f"Attempting Removing user {username} at {datetime.datetime.now()}")
-    if(askAdmin()):
+    if askAdmin():
+        manager.print("INFO",f"Attempting Removing user {username} at {datetime.datetime.now()}")
         with open("users.json","r") as f:
             users=json.load(f)
             for user in users["users"]:
-                if user["username"]==username:users["users"].remove(user)
+                if user["username"]==username:
+                    users["users"].remove(user)
         with open("users.json","w") as f:json.dump(users,f)
-    else:error("CRITICAL","Admin Attempt Failed")
-def get_users():
+        manager.print("INFO",f"Removed user {username} at {datetime.datetime.now()}")
+        return True
+    else:
+        manager.print("CRITICAL","Admin Attempt Failed")
+        return False
+def get_all_users()->list|None:
     """
-    get a list of all users separated by commas to be printed
+    gets all users if admin is given
+    returns none if failed
     """
-    manager.print("INFO",f"Attempting Getting users at {datetime.datetime.now()}")
-    if(askAdmin()):
-        with open("users.json","r") as f:
-            users=json.load(f)
-            users_list=[]
-            for user in users["users"]:users_list.append(user["username"])
-            return ", ".join(users_list)
-    else:error("CRITICAL","Admin Attempt Failed")
-def await_response():
-    """
-    waits for a response from the client for uuid acknowledgement
-    true=succesful
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((server,5151))
-        s.listen()
-        while True:
-            conn, addr = s.accept()
-            with conn:
-                print('Connected by', addr)
-                #check if addr is in active users IP
-                for user in manager.active_users:
-                    if user["IP"]==addr[0]:
-                        
-                        while True:
-                            data = conn.recv(1024)
-                            if not data: break
-                            if data.decode()==RECV_SPECIAL_ID:return True
-                            else:
-                                #find active user with addr[0] IP then get the index of that user in active_users and remove it 
-                                for user in manager.active_users:
-                                    if user["IP"]==addr[0]:
-                                        manager.active_users.remove(user)
-                                        return False
-                    return False
-def send_get_users(IP):
-    """
-    take get users string and send to the requestig client by IP
-    """
-    with socket.socket(socket.Af_INET, socket.SOCK_STREAM) as s:
-        s.bind((server,5151))
-        s.connect((IP,5151))
-        s.sendall(get_users().encode())
-def get_active_users():
-    """
-    get a list of all active users separated by commas to be printed
-    """
-    manager.print("INFO",f"Getting active users at {datetime.datetime.now()} for send_get_active_users()")
-    with open("users.json","r") as f:
-            users=json.load(f)
-            users_list=[]
-            for user in manager.active_users:users_list.append(user["username"])
-            return ", ".join(users_list)
-def send_get_active_users(IP):
-    """
-    take get active users string and send to the requestig client by IP
-
-    """
-def handle_message(message:dict):
+    if askAdmin():return manager.get_users()
+    else:
+        manager.print("CRITICAL","Admin Attempt Failed")
+        return None
+def get_active_users()->list:return manager.get_active_users()
+#reworking will finish last
+def handle_message(message:str)->bool|dict:
     """
     takes received messages and processes. 
     Following messages are:
         {"login" - {username: "username", password: "password","ip":"ip"}}
+        {"Active?" - {session_id: "session_id"}}
         {"logout" - {username: "username"}}
         {"get_users" - {username: "username"}}
         {"get_active_users" - {}}
-        {"recv_special_id" - {}}
+        {"recv_special_id" - {username:username,session_id:session_id}}
     users are managed in the file users.json
 
-    return true if successful
+    :returns bool: if command executed successfully without needing any additional sending
+    :returns dict: made to be sent to client
     """
-
+    message=json.loads(message)
+    print(message)
     match list(message.keys())[0]:
         case "login":
-                #get username and password from message format above
-                username=message["login"]["username"]
-                password=message["login"]["password"]
-                #check if user exists in users.json
-                with open("users.json","r") as f:
-                    users=json.load(f)
-                    for user in users["users"]:
-                        if user["username"]==username:
-                            #check if password is correct
-                            if user["password"]==password:
-                                #generate a session id and add to active users
-                                session_id=str(uuid.uuid4())
-                                if message["login"]["ip"]=="testing":
-                                    manager.print("INFO",f"DEBUG: User {username} logged in at {datetime.datetime.now()} with session id {session_id}")
-                                    manager.active_users.append({"username":username,"session_id":session_id,"IP":"testing"})
-                                    return True
-                                manager.add_active_user(username,session_id,message["login"]["ip"])
-                                #send session id to client
-                                connect_to_host(message["login"]["ip"],5151,session_id)
-                                #wait for recv_special_id message
-                                #check if session id is correct
-                                if await_response(RECV_SPECIAL_ID):
-                                    manager.print("INFO",f"User {username} confirmed login at {datetime.datetime.now()}")
-                                    return True
-                                manager.print("CRITCAL",f"User {username} failed to confirm login at {datetime.datetime.now()}")
-                                connect_to_host(message["login"]["ip"],5151,"NULL")
-                                return False
+            """
+            Login Process:
+                check if user exists in users.json and if password matches the username/password combo in users.json
+                if user exists and password matches:
+                    generate a session id and add to active users with an IP address and a recv flag for acknowledgement
+                    return the dictionary to be sent out to the client
 
-                            else:manager.print("WARNING",f"User {username} attempted login at {datetime.datetime.now()} with incorrect password.")
-                        else:manager.print("WARNING",f"User {username} attempted login at {datetime.datetime.now()} with incorrect username. ")
-                    connect_to_host(message["login"]["ip"],5151,"NULL")
+            :returns dict: send the uuid will be awaiting a recv_special_id message
+            :returns bool: if the user does not exist or the password is incorrect or something else fails
+            """
+            username=message["login"]["username"]
+            password=message["login"]["password"]
+            if not message["login"]["ip"]:
+                manager.print("WARNING",f"User {username} attempted login at {datetime.datetime.now()} with no ip address")
+                return False
+            if manager.check_username_exists(username):
+                if manager.validate_signin(username=username,password=password):
+                    session_id=uuid.uuid4()
+                    manager.add_active_user(username,session_id,message["login"]["ip"])
+                    manager.print("INFO",f"User {username} logged in at {datetime.datetime.now()} with session id {session_id}")
+                    return {"recv_special_id":{"username":username,"session_id":session_id}}
+                else:
+                    manager.print("WARNING",f"User {username} attempted login at {datetime.datetime.now()} with incorrect password.")
                     return False
-        case "logout":
-            #get username from message format above
-            username=message["logout"]["username"]
-            #check if user is in active users
-            for user in manager.active_users:
-                if user["username"]==username:
-                    #remove user from active users
-                    manager.active_users.remove(user)
-                    manager.print("INFO",f"User {username} logged out at {datetime.datetime.now()}")
-                    return True
-            manager.print("WARNING",f"User {username} attempted logout at {datetime.datetime.now()} while not logged in")
-            return False    
-        case "get_users": 
-            #if the username in the message has id=1 and active. elif (askAdmin()) else return False after logging  
-            username=message["get_users"]["username"]
-            for user in manager.active_users:
-                if user["username"]==username:
-                    if user["id"]==1:
-                        manager.print("INFO",f"User {username} requested users at {datetime.datetime.now()}")
-                        #get the username ip address from active users and pass to send_get_users()
-                        for user in manager.active_users:
-                            if user["username"]==username:
-                                send_get_users(user["IP"])
-                                return True
-                    else:
-                        manager.print("WARNING",f"User {username} attempted to get users at {datetime.datetime.now()} without admin privileges")
-                        return False
-        case "get_active_users":
-            #if the username in the message has id=1 and active. elif (askAdmin()) else return False after logging  
-            username=message["get_active_users"]["username"]
-            for user in manager.active_users:
-                if user["username"]==username:
-                    if user["id"]==1:
-                        manager.print("INFO",f"User {username} requested active users at {datetime.datetime.now()}")
-                        #get the username ip address from active users and pass to send_get_users()
-                        for user in manager.active_users:
-                            if user["username"]==username:
-                                send_get_active_users(user["IP"])
-                                manager.print("INFO",f"Server sent User {username} active users at {datetime.datetime.now()}")
-                                return True
-                    else:
-                        if(askAdmin()):
-                            manager.print("INFO",f"User {username} requested active users at {datetime.datetime.now()}")
-                            #get the username ip address from active users and pass to send_get_users()
-                            for user in manager.active_users:
-                                if user["username"]==username:
-                                    send_get_active_users(user["IP"])
-                                    manager.print("INFO",f"Server sent User {username} active users at {datetime.datetime.now()}")
-                                    return True
-                        manager.print("WARNING",f"User {username} attempted to get active users at {datetime.datetime.now()} without admin privileges")
-                        return False             
+            else:
+                manager.print("WARNING",f"User {username} attempted login at {datetime.datetime.now()} with incorrect username. ")
+                return False
         case "recv_special_id":
-            manager.print("INFO",f"Received special id at {datetime.datetime.now()}")
-            return True
+            """
+            Recv Special ID used for acknowledging login
+            
+            """
         case _:
-            manager.print("WARNING",f"Received unknown message at {datetime.datetime.now()}")
+            manager.print("WARNING",f"Unknown message received at {datetime.datetime.now()}")
             return False
-def startup():
-    """
-    Server Maintenance Startup(should run everytime server starts up)
-    """
-    check_duplicate_users()
-def listen(expected_ip)->dict:
+########################################################################################################################
+#Websocket Functions
+
+#:TODO: Finish this
+async def recvMessage(websocket):
+        async for message in websocket:
+            pool=ThreadPool(processes=1)
+            res=pool.apply_async(handle_message,(message,))
+            pool.close()
+            await websocket.send(str(res.get()))
+async def main():
+    async with serve(recvMessage,SERVER,5151):await asyncio.Future()
+
+#Touch Later
+def listen()->NoReturn:
     """
     Listens on port 5151 on separate thread to listen for any http data sent using websocket and returns the content as a dictionary from its string form of "{command:{arguments:paramter,...}}"
     """
-    ret_val=None
-    def _listen(expected_ip):
-        """
-        actual function
-        """
-        class SimpleEcho(websocket.WebSocket):
-            def handleMessage(self):
-                # echo message back to client
-                message=self.data
-                nonlocal ret_val
-                ret_val=json.loads(message)
-                if ret_val["login"]["ip"]==expected_ip:
-                    if handle_message(ret_val):self.sendMessage("ACK")
-                    else:self.sendMessage("NACK")
-                else:self.sendMessage("NACK")
-            def handleConnected(self):pass
-            def handleClose(self):pass
-        #define SimpleWebSocketServer
-        class SimpleWebSocketServer(websocket.WebSocketServer):
-            def __init__(self, host, port, websocketclass, selectInterval=0.1):
-                websocket.WebSocketServer.__init__(self, host, port, websocketclass, selectInterval)
-        server = SimpleWebSocketServer('', 5151, SimpleEcho)
-        server.serveforever()
-                    
-    threading.Thread(target=_listen,args=(expected_ip)).start()
-    return ret_val
-def main():
+    manager.print("INFO",f"Running startup at {datetime.datetime.now()}")
+    asyncio.run(main())
+########################################################################################################################
+def startup():
     """
-    testing function only
-    FINISHED:
-        ADD_USER()
-        REMOVE_USER()
-        login
-        logout
-
-    TEST:
-        get_users
-        get_active_users
-        recv_special_id
-        listen()
+    This startup function will be implemented later
     """
-
-if __name__ == "__main__":
-    PORT=5151
-    #make check_duplicate_users() run every 5 minutes in a thread without stopping the main thread
-    threading.Timer(300,check_duplicate_users).start()
-    
-    main()
+    threading.Timer(300,check_duplicate_users).start()#check for duplicates every 5 minutes
+    listen()
+if __name__=="__main__":
+    manager.print("INFO",f"Server Started at {datetime.datetime.now()}")
+    startup()
